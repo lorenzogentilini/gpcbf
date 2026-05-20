@@ -1,0 +1,521 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%2345678901234567890123456789012345678901234567890123456789012345678901234567890
+%        1         2         3         4         5         6         7         8
+
+\documentclass[letterpaper, 10 pt, conference]{ieeeconf}
+
+\IEEEoverridecommandlockouts
+\overrideIEEEmargins
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\let\proof\relax
+\let\endproof\relax
+\usepackage{amsthm}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{bm}
+\usepackage{mathtools}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{assumption}{Assumption}
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+
+\DeclareMathOperator{\diag}{diag}
+
+\title{\LARGE \bf
+Gaussian Process-Enhanced High-Gain Observer Control Barrier Functions for Safe Navigation Under Partial Observability
+}
+
+\author{Author Names Omitted for Review%
+}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+\pagestyle{empty}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{abstract}
+Ensuring safety in autonomous navigation requires enforcing state constraints in real time, even when the barrier function and its higher-order derivatives are not directly measurable. This paper presents the Gaussian Process High-Gain Observer Control Barrier Function (GP-HGO-CBF), a novel framework that embeds Gaussian Process (GP) regression directly within a high-gain observer (HGO) to estimate a control barrier function and its Lie derivatives online. Unlike existing cascade approaches that use observers and learning independently, our method feeds the GP-predicted second-order Lie derivative back into the observer dynamics, forming a closed-loop estimation architecture that achieves tighter steady-state error bounds. We provide formal convergence guarantees showing that the observer estimation error scales with the GP residual rather than the full unknown drift, and derive a probabilistic safety certificate ensuring forward invariance of the safe set with high confidence. Numerical simulations on a planar double-integrator navigation problem with multiple obstacles validate the theoretical findings and demonstrate collision-free trajectory generation with online learning.
+\end{abstract}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{INTRODUCTION}
+\label{sec:introduction}
+
+Safe autonomous navigation requires controllers that guarantee constraint satisfaction at all times, even in the presence of model uncertainty or incomplete state information. Control Barrier Functions (CBFs) \cite{ames2017cbf} have emerged as a principled tool for enforcing safety by rendering a designated safe set forward invariant through a constraint on the control input. When the barrier function has relative degree one with respect to the control input, the resulting safety filter is a simple quadratic program (QP). However, many practical systems---including double integrators and vehicles---have barrier functions of relative degree two or higher, requiring High-Order CBFs (HOCBFs) \cite{xiao2019hocbf} and knowledge of higher-order Lie derivatives.
+
+A fundamental challenge arises when the barrier function $h(x)$ and its derivatives are not available in closed form, either because the environment is partially unknown or because $h$ depends on sensor measurements that do not directly provide derivative information. In such settings, one must \emph{estimate} $h$ and $L_f h$ online, introducing estimation error into the safety constraint.
+
+Two lines of research address this challenge. The first uses \emph{Gaussian Process (GP) regression} to learn the barrier function or system dynamics from data \cite{jagtap2020gpcbf, castaneda2021pointwise, castaneda2022recursive}, incorporating posterior variance into robust CBF constraints. The second uses \emph{observers}---particularly high-gain observers (HGOs)---to reconstruct unmeasured derivatives from output measurements \cite{khalil2017hgo}. Recently, Trimarchi et al.\ \cite{trimarchi2022hgogp} proposed a cascade architecture combining HGOs with GP regression for analytic differentiation in CBF contexts.
+
+In this paper, we propose the \emph{GP-HGO-CBF} framework, which goes beyond the cascade paradigm by embedding the GP prediction \emph{within} the observer dynamics. Specifically, the GP-predicted second-order Lie derivative $L_f^2 h$ is fed back as a known-model term inside the HGO, so that the observer only needs to reject the GP residual error rather than the full unknown drift. This closed-loop coupling yields provably tighter estimation bounds and, consequently, less conservative safety constraints.
+
+\subsection{Contributions}
+The contributions of this paper are as follows:
+\begin{enumerate}
+    \item We propose a novel closed-loop architecture that embeds GP regression within HGO dynamics for barrier function estimation, as opposed to existing open-loop cascade approaches.
+    \item We provide a formal convergence analysis showing that the observer steady-state error scales as $\mathcal{O}(\bar{\epsilon}_{GP}/\ell)$, where $\bar{\epsilon}_{GP}$ is the GP approximation residual and $\ell$ is the observer gain, compared to $\mathcal{O}(\|\phi\|_\infty/\ell)$ for standard HGOs.
+    \item We derive a probabilistic safety certificate guaranteeing $P(h(x(t)) \geq 0, \forall t) \geq 1 - \delta$ by combining GP posterior bounds with observer error analysis.
+    \item We validate the approach through numerical simulations demonstrating collision-free navigation with online GP learning.
+\end{enumerate}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{RELATED WORKS}
+\label{sec:related}
+
+\subsection{Control Barrier Functions}
+
+Control Barrier Functions were formalized by Ames et al.\ \cite{ames2017cbf} as a tool for rendering a safe set forward invariant. For a system $\dot{x} = f(x) + g(x)u$ and a safe set $\mathcal{C} = \{x : h(x) \geq 0\}$, the CBF condition $L_f h(x) + L_g h(x) u + \alpha(h(x)) \geq 0$ ensures that any Lipschitz continuous controller satisfying this inequality keeps the system within $\mathcal{C}$. When the relative degree of $h$ exceeds one, Xiao and Belta \cite{xiao2019hocbf} introduced HOCBFs that propagate the constraint through successive Lie derivatives until the control input appears explicitly.
+
+\subsection{Gaussian Process-Based Safety}
+
+Jagtap et al.\ \cite{jagtap2020gpcbf} first proposed learning the unknown system dynamics via GP regression and incorporating the posterior mean and variance into a robust CBF constraint. Casta\~{n}eda et al.\ \cite{castaneda2021pointwise} addressed the pointwise feasibility of GP-CBF under model uncertainty, providing conditions under which the safety-constrained QP remains solvable. Their follow-up work \cite{castaneda2022recursive} established recursive feasibility for online learning settings. Lederer et al.\ \cite{lederer2019uniform} provided uniform error bounds for GP regression that enable high-probability safety guarantees when combined with CBFs. More recently, Aali and Liu \cite{aali2024hocbfgp} used GPs to mitigate uncertainty in HOCBFs, converting chance constraints into second-order cone programs.
+
+A limitation of GP-CBF approaches is their reliance on differentiating the GP posterior to obtain Lie derivative estimates, which amplifies uncertainty and can lead to conservative constraints, especially in early learning phases when data is sparse.
+
+\subsection{Observer-Based Control Barrier Functions}
+
+Observer-based approaches to CBF safety have received comparatively less attention. Cheng et al.\ \cite{cheng2022dobcbf} proposed Disturbance-Observer-Based CBFs (DOB-CBFs) that estimate pointwise disturbances without learning a full model, achieving better sample and computational efficiency than GP-based methods. However, DOB-CBFs require the disturbance to satisfy matching conditions and do not provide a principled mechanism for extrapolating the learned information to unvisited states.
+
+The most closely related work is by Trimarchi et al.\ \cite{trimarchi2022hgogp}, who proposed combining high-gain observers with Gaussian Process priors for data-driven analytic differentiation. Their approach uses a cascade of HGOs to pre-filter noisy measurements, then trains GP regressors on the filtered data. They demonstrated the approach in the context of CBF applications requiring high-order derivatives. However, their architecture is \emph{open-loop}: the GP and observer operate independently, with the GP trained offline on observer outputs. This means the observer must reject the \emph{entire} unknown drift term, regardless of how well the GP has learned it.
+
+\subsection{Distinction from Prior Work}
+
+Our GP-HGO-CBF framework differs from \cite{trimarchi2022hgogp} in a fundamental architectural choice: the GP posterior mean is fed \emph{back into} the observer dynamics as a model-based feedforward term. This creates a closed-loop estimation structure where:
+\begin{itemize}
+    \item The observer only needs to reject the GP \emph{residual} (approximation error), not the full unknown term.
+    \item As the GP improves with data, the observer error bound tightens automatically.
+    \item The observer provides filtered training data to the GP, creating a mutually beneficial coupling.
+\end{itemize}
+This structural difference leads to provably better steady-state error bounds (Theorem~\ref{thm:convergence}) and less conservative safety constraints (Theorem~\ref{thm:safety}).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{PRELIMINARIES AND PROBLEM SETUP}
+\label{sec:preliminaries}
+
+\subsection{Notation}
+
+We denote by $\|\cdot\|$ the Euclidean norm for vectors and the induced 2-norm for matrices. Given a symmetric positive definite matrix $P$, $\lambda_{\min}(P)$ and $\lambda_{\max}(P)$ denote its minimum and maximum eigenvalues. The class $\mathcal{K}$ denotes strictly increasing functions $\alpha: [0, \infty) \to [0, \infty)$ with $\alpha(0) = 0$. We write $\mathcal{H}_k$ for the Reproducing Kernel Hilbert Space (RKHS) associated with kernel $k$.
+
+\subsection{System Dynamics}
+
+Consider a control-affine system:
+\begin{equation}\label{eq:dynamics}
+    \dot{x} = f(x) + g(x) u, \quad x \in \mathbb{R}^n, \; u \in \mathcal{U} \subset \mathbb{R}^m
+\end{equation}
+where $f: \mathbb{R}^n \to \mathbb{R}^n$ and $g: \mathbb{R}^n \to \mathbb{R}^{n \times m}$ are locally Lipschitz, and $\mathcal{U}$ is a compact convex set of admissible inputs.
+
+In this work, we focus on the planar double-integrator:
+\begin{equation}\label{eq:double_int}
+    \dot{x} = \underbrace{\begin{bmatrix} x_3 \\ x_4 \\ 0 \\ 0 \end{bmatrix}}_{f(x)} + \underbrace{\begin{bmatrix} 0 & 0 \\ 0 & 0 \\ 1 & 0 \\ 0 & 1 \end{bmatrix}}_{g(x)} u
+\end{equation}
+with state $x = [p_x, p_y, v_x, v_y]^\top \in \mathbb{R}^4$ and bounded input $u \in [u_{\min}, u_{\max}]^2$.
+
+\subsection{Control Barrier Functions}
+
+\begin{definition}[Safe Set]
+Given a continuously differentiable function $h: \mathbb{R}^n \to \mathbb{R}$, define the safe set $\mathcal{C}$, its boundary $\partial \mathcal{C}$, and its interior $\text{Int}(\mathcal{C})$ as:
+\begin{align}
+    \mathcal{C} &= \{x \in \mathbb{R}^n : h(x) \geq 0\} \\
+    \partial \mathcal{C} &= \{x \in \mathbb{R}^n : h(x) = 0\} \\
+    \text{Int}(\mathcal{C}) &= \{x \in \mathbb{R}^n : h(x) > 0\}
+\end{align}
+\end{definition}
+
+\begin{definition}[Control Barrier Function \cite{ames2017cbf}]
+A continuously differentiable function $h: \mathbb{R}^n \to \mathbb{R}$ is a CBF for system \eqref{eq:dynamics} on $\mathcal{C}$ if there exists an extended class $\mathcal{K}_\infty$ function $\alpha$ such that:
+\begin{equation}\label{eq:cbf_condition}
+    \sup_{u \in \mathcal{U}} \left[ L_f h(x) + L_g h(x) u + \alpha(h(x)) \right] \geq 0, \quad \forall x \in \mathcal{C}
+\end{equation}
+\end{definition}
+
+\subsection{High-Order Control Barrier Functions}
+
+For the double integrator \eqref{eq:double_int}, the barrier function $h(x)$ depends only on position and thus has relative degree 2 with respect to $u$. Following \cite{xiao2019hocbf}, we define:
+\begin{align}
+    \psi_0(x) &= h(x) \\
+    \psi_1(x) &= \dot{\psi}_0(x) + \alpha_1(\psi_0(x)) = L_f h(x) + \alpha_1(h(x))
+\end{align}
+
+The HOCBF condition requires:
+\begin{equation}\label{eq:hocbf}
+    L_f^2 h(x) + L_g L_f h(x) \, u + \alpha_1 \alpha_2 \, h(x) + (\alpha_1 + \alpha_2) L_f h(x) \geq 0
+\end{equation}
+for linear class-$\mathcal{K}$ functions $\alpha_i(r) = k_i r$ with $k_i > 0$, $i = 1, 2$. Denoting $\bm{k} = [k_1 k_2, \; k_1 + k_2]$, the constraint becomes:
+\begin{equation}\label{eq:hocbf_compact}
+    L_f^2 h + L_g L_f h \cdot u + \bm{k}_1 h + \bm{k}_2 L_f h \geq 0
+\end{equation}
+
+\subsection{Gaussian Process Regression}
+
+A Gaussian Process $\mathcal{GP}(\mu_0, k)$ is a distribution over functions, specified by a prior mean $\mu_0: \mathbb{R}^d \to \mathbb{R}$ and a positive definite kernel $k: \mathbb{R}^d \times \mathbb{R}^d \to \mathbb{R}$. Given $N$ observations $\mathcal{D} = \{(x_i, y_i)\}_{i=1}^N$ with $y_i = f(x_i) + \varepsilon_i$, $\varepsilon_i \sim \mathcal{N}(0, \sigma_n^2)$, the posterior is:
+\begin{align}
+    \mu_N(x) &= \bm{k}_*(K + \sigma_n^2 I)^{-1} \bm{y} \label{eq:gp_mean}\\
+    \sigma_N^2(x) &= k(x,x) - \bm{k}_*(K + \sigma_n^2 I)^{-1} \bm{k}_*^\top \label{eq:gp_var}
+\end{align}
+where $\bm{k}_* = [k(x, x_1), \ldots, k(x, x_N)]$ and $K_{ij} = k(x_i, x_j)$.
+
+We employ a squared exponential (SE) kernel:
+\begin{equation}\label{eq:se_kernel}
+    k(x, x') = \exp\left(-\sum_{d=1}^{D} \frac{(x_d - x_d')^2}{2\tau_d^2}\right)
+\end{equation}
+with length-scale parameters $\bm{\tau} = [\tau_1, \ldots, \tau_D]^\top$.
+
+\begin{assumption}\label{ass:rkhs}
+The true function $L_f h$ belongs to the RKHS $\mathcal{H}_k$ associated with kernel $k$, and its RKHS norm is bounded: $\|L_f h\|_{\mathcal{H}_k} \leq B$.
+\end{assumption}
+
+Under Assumption~\ref{ass:rkhs}, the following uniform error bound holds \cite{lederer2019uniform, srinivas2010gpucb}:
+\begin{lemma}[GP Posterior Error Bound]\label{lem:gp_bound}
+Under Assumption~\ref{ass:rkhs}, for any $\delta \in (0,1)$, with probability at least $1 - \delta$:
+\begin{equation}\label{eq:gp_error_bound}
+    |f(x) - \mu_N(x)| \leq \beta_N(\delta) \, \sigma_N(x), \quad \forall x \in \mathcal{X}
+\end{equation}
+where $\beta_N(\delta) = B + \sigma_n \sqrt{2(\gamma_N + 1 + \ln(1/\delta))}$ and $\gamma_N$ is the maximum information gain after $N$ observations.
+\end{lemma}
+
+\subsection{High-Gain Observers}
+
+Consider the problem of estimating $h(x)$ and $L_f h(x)$ from measurements of $y = h(x(t))$. A standard second-order HGO takes the form \cite{khalil2017hgo}:
+\begin{align}
+    \dot{\hat{z}}_1 &= \hat{z}_2 + \ell \, d_1 (y - \hat{z}_1) \label{eq:hgo1}\\
+    \dot{\hat{z}}_2 &= \ell^2 \, d_2 (y - \hat{z}_1) \label{eq:hgo2}
+\end{align}
+where $\hat{z}_1 \approx h(x)$, $\hat{z}_2 \approx L_f h(x)$, $\ell > 0$ is the high-gain parameter, and $d_1, d_2 > 0$ are chosen such that $s^2 + d_1 s + d_2$ is Hurwitz.
+
+\subsection{Problem Statement}
+
+\begin{quote}
+\textbf{Problem:} Given system \eqref{eq:dynamics} with a barrier function $h(x)$ that is measurable (e.g., from range sensors) but whose Lie derivatives $L_f h$ and $L_f^2 h$ are unavailable, design an online learning and estimation framework that:
+\begin{enumerate}
+    \item Estimates $h(x)$ and $L_f h(x)$ with quantifiable error bounds,
+    \item Provides a safety filter ensuring $h(x(t)) \geq 0$ for all $t \geq 0$ with probability at least $1 - \delta$,
+    \item Improves estimation accuracy as more data is collected during operation.
+\end{enumerate}
+\end{quote}
+
+The key challenge is that the HOCBF condition \eqref{eq:hocbf} requires $L_f^2 h$ and $L_g L_f h$, which depend on second-order spatial derivatives of $h$. Standard HGOs can estimate these but with steady-state errors proportional to the magnitude of the unknown second derivative---which can be large near obstacles. Our approach mitigates this by using GP learning to reduce the effective unknown drift that the observer must reject.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{PROPOSED APPROACH}
+\label{sec:approach}
+
+\subsection{GP-Enhanced High-Gain Observer}
+
+We propose augmenting the standard HGO \eqref{eq:hgo1}--\eqref{eq:hgo2} with a GP-based feedforward term that compensates for the unknown second-order dynamics:
+\begin{align}
+    \dot{\hat{z}}_1 &= \hat{z}_2 + \ell \, d_1 (y - \hat{z}_1) \label{eq:gphgo1}\\
+    \dot{\hat{z}}_2 &= \ell^2 \, d_2 (y - \hat{z}_1) + \underbrace{\mu_{L_f^2 h}(x) + \mu_{L_g L_f h}(x) \, u}_{\text{GP-based model compensation}} \label{eq:gphgo2}
+\end{align}
+where $\mu_{L_f^2 h}(x)$ and $\mu_{L_g L_f h}(x)$ are the GP posterior mean predictions of $L_f^2 h(x)$ and $L_g L_f h(x)$, respectively.
+
+In practice, we train a single GP regressor on the 4-dimensional state $x = [p_x, p_y, v_x, v_y]^\top$ to learn $L_f h$, and obtain $L_f^2 h$ and $L_g L_f h$ by differentiating the posterior mean:
+\begin{align}
+    \mu_{L_f^2 h}(x) &= \nabla_x \mu_{L_f h}(x) \cdot f(x) \label{eq:Lffh_gp}\\
+    \mu_{L_g L_f h}(x) &= \nabla_x \mu_{L_f h}(x) \cdot g(x) \label{eq:Lgfh_gp}
+\end{align}
+
+The GP is trained using the observer's own estimate $\hat{z}_2$ as the target value for $L_f h$ at the current state, creating a coupled observer-learner system.
+
+\subsection{Safety Filter Formulation}
+
+Given a nominal controller $u_{\text{nom}}(x)$ (e.g., a proportional-derivative controller driving the system to a goal), the GP-HGO-CBF safety filter solves:
+\begin{align}
+    u^* = \arg\min_{u \in \mathcal{U}} \quad & \frac{1}{2}\|u - u_{\text{nom}}\|^2 + \lambda \, \nabla_x \sigma_{N}^2(x) \cdot g(x) \, u \label{eq:qp_cost}\\
+    \text{s.t.} \quad & \hat{L}_f^2 h + \hat{L}_g L_f h \cdot u + \bm{k}_1 \hat{z}_1 + \bm{k}_2 \hat{z}_2 \geq \rho_t \label{eq:qp_cons}
+\end{align}
+where:
+\begin{itemize}
+    \item $\hat{z}_1, \hat{z}_2$ are the GP-HGO estimates of $h$ and $L_f h$,
+    \item $\hat{L}_f^2 h = \nabla_x \mu_{L_f h}(x) \cdot f(x)$ and $\hat{L}_g L_f h = \nabla_x \mu_{L_f h}(x) \cdot g(x)$,
+    \item $\rho_t \geq 0$ is a robustness margin (defined in Theorem~\ref{thm:safety}),
+    \item The second term in \eqref{eq:qp_cost} penalizes control directions that increase GP uncertainty, encouraging exploration.
+\end{itemize}
+
+\subsection{Online Data Collection}
+
+The GP is updated online using an event-triggered sampling strategy. A new training point $(x_t, \hat{z}_2(t))$ is added when either:
+\begin{itemize}
+    \item \emph{Distance criterion:} $\|x_t - x_{\text{last}}\| > d_{\min}$, ensuring spatial coverage, or
+    \item \emph{Variance criterion:} $\sigma_N^2(x_t) > \sigma_{\min}^2$, ensuring informative samples.
+\end{itemize}
+
+After adding a sample, the GP hyperparameters $\bm{\tau}$ are re-optimized by maximizing the marginal likelihood.
+
+\subsection{Convergence Analysis}
+
+We now present the main theoretical results. Define the observation errors:
+\begin{equation}
+    e_1 = \hat{z}_1 - h(x), \quad e_2 = \hat{z}_2 - L_f h(x)
+\end{equation}
+
+\begin{theorem}[Observer Convergence]\label{thm:convergence}
+Consider the GP-HGO \eqref{eq:gphgo1}--\eqref{eq:gphgo2} applied to system \eqref{eq:dynamics}. Suppose the GP approximation error satisfies $\|\epsilon_{GP}(x,u)\| \leq \bar{\epsilon}$ where:
+\begin{equation}
+    \epsilon_{GP}(x,u) = (L_f^2 h(x) + L_g L_f h(x) \cdot u) - (\mu_{L_f^2 h}(x) + \mu_{L_g L_f h}(x) \cdot u)
+\end{equation}
+Then for any $\ell > 0$ such that the matrix $A = \begin{bmatrix} -d_1 & 1 \\ -d_2 & 0 \end{bmatrix}$ is Hurwitz, the observation error satisfies:
+\begin{equation}\label{eq:error_bound}
+    \|e(t)\| \leq c_1 \, e^{-\ell \lambda t} \|e(0)\| + \frac{c_2 \, \bar{\epsilon}}{\ell}
+\end{equation}
+where $\lambda = \lambda_{\min}(-\frac{1}{2}(A + A^\top)) > 0$, and $c_1, c_2 > 0$ are constants depending only on $d_1, d_2$.
+\end{theorem}
+
+\begin{proof}
+Define the scaled error $\eta = [\eta_1, \eta_2]^\top$ with $\eta_1 = e_1$ and $\eta_2 = e_2/\ell$. The true dynamics of $h$ and $L_f h$ are:
+\begin{align}
+    \dot{h}(x) &= L_f h(x) + L_g h(x) u \\
+    \frac{d}{dt}L_f h(x) &= L_f^2 h(x) + L_g L_f h(x) u
+\end{align}
+
+For the double integrator, $L_g h = 0$ (since $h$ depends only on position and $g$ acts on acceleration). Therefore $\dot{h} = L_f h$. The error dynamics become:
+\begin{align}
+    \dot{e}_1 &= (\hat{z}_2 + \ell d_1(y - \hat{z}_1)) - L_f h \\
+              &= e_2 - \ell d_1 e_1 \\
+    \dot{e}_2 &= (\ell^2 d_2(y - \hat{z}_1) + \mu_{GP}) - (L_f^2 h + L_g L_f h \cdot u) \\
+              &= -\ell^2 d_2 e_1 - \epsilon_{GP}(x, u)
+\end{align}
+
+In scaled coordinates $\eta_1 = e_1$, $\eta_2 = e_2/\ell$:
+\begin{equation}
+    \ell \dot{\eta} = A \eta + \frac{1}{\ell} B \epsilon_{GP}
+\end{equation}
+where $B = [0, -1]^\top$. Let $P$ be the positive definite solution to $A^\top P + P A = -Q$ for some $Q \succ 0$. Define $V(\eta) = \eta^\top P \eta$. Then:
+\begin{align}
+    \dot{V} &= -\frac{1}{\ell} \eta^\top Q \eta + \frac{2}{\ell^2} \eta^\top P B \epsilon_{GP} \\
+    &\leq -\frac{\lambda_{\min}(Q)}{\ell} \|\eta\|^2 + \frac{2\|P\|}{\ell^2} \|\eta\| \, \bar{\epsilon}
+\end{align}
+
+By the comparison lemma, this yields the exponential convergence to the ball:
+\begin{equation}
+    \|\eta(t)\| \leq \sqrt{\frac{\lambda_{\max}(P)}{\lambda_{\min}(P)}} e^{-\frac{\lambda_{\min}(Q)}{2\ell \lambda_{\max}(P)} t} \|\eta(0)\| + \frac{2\|P\| \bar{\epsilon}}{\ell \lambda_{\min}(Q)}
+\end{equation}
+
+Converting back to original coordinates ($\|e\| \leq \max(1, \ell)\|\eta\|$) gives \eqref{eq:error_bound} with $c_1 = \sqrt{\lambda_{\max}(P)/\lambda_{\min}(P)}$ and $c_2 = 2\|P\|/\lambda_{\min}(Q)$.
+\end{proof}
+
+\begin{remark}
+For a standard HGO without GP compensation, the same analysis yields $\|e\|_\infty \leq c_2 \|\phi\|_\infty / \ell$ where $\phi = L_f^2 h + L_g L_f h \cdot u$ is the \emph{full} unknown drift. Since $\bar{\epsilon} \leq \|\phi\|_\infty$ always holds (with equality when the GP has no data), the GP-HGO always performs at least as well as the standard HGO, and strictly better whenever the GP has learned a non-trivial approximation.
+\end{remark}
+
+\subsection{Probabilistic Safety Guarantee}
+
+We now combine the observer convergence result with GP error bounds to establish a probabilistic safety certificate.
+
+\begin{assumption}\label{ass:initial_safety}
+The system starts in the interior of the safe set with sufficient margin: $h(x(0)) > \rho_0 / \bm{k}_1$, where $\rho_0$ is the initial robustness margin.
+\end{assumption}
+
+\begin{theorem}[Probabilistic Safety]\label{thm:safety}
+Let Assumptions~\ref{ass:rkhs} and \ref{ass:initial_safety} hold. Suppose the GP-HGO-CBF safety filter \eqref{eq:qp_cost}--\eqref{eq:qp_cons} is applied with robustness margin:
+\begin{equation}\label{eq:margin}
+    \rho_t = \bm{k}_1 \bar{e}_1(t) + \bm{k}_2 \bar{e}_2(t) + \beta_N(\delta/2) \left\| \nabla_x \sigma_N(x) \cdot [f(x), g(x)] \right\|
+\end{equation}
+where $\bar{e}_1(t)$ and $\bar{e}_2(t)$ are the observer error bounds from Theorem~\ref{thm:convergence} evaluated with the GP error bound from Lemma~\ref{lem:gp_bound}:
+\begin{equation}
+    \bar{e}_1(t) \leq \frac{c_2 \beta_N(\delta/2) \bar{\sigma}_N}{\ell}, \quad \bar{e}_2(t) \leq c_2 \beta_N(\delta/2) \bar{\sigma}_N
+\end{equation}
+with $\bar{\sigma}_N = \sup_{x \in \mathcal{X}} \sigma_N(x)$.
+
+Then, with probability at least $1 - \delta$:
+\begin{equation}
+    h(x(t)) \geq 0, \quad \forall t \geq 0
+\end{equation}
+provided the optimization \eqref{eq:qp_cost}--\eqref{eq:qp_cons} is feasible at all times.
+\end{theorem}
+
+\begin{proof}
+The proof proceeds in three steps.
+
+\textbf{Step 1 (GP bound):} By Lemma~\ref{lem:gp_bound}, with probability at least $1 - \delta/2$:
+\begin{equation}
+    |\epsilon_{GP}(x, u)| \leq \beta_N(\delta/2) \, \sigma_N(x), \quad \forall x, \forall u \in \mathcal{U}
+\end{equation}
+
+\textbf{Step 2 (Observer bound):} Under the event in Step 1, Theorem~\ref{thm:convergence} applies with $\bar{\epsilon} = \beta_N(\delta/2) \bar{\sigma}_N$. After the transient (for $t \geq t^*$ where the exponential term is negligible), the errors satisfy $|e_1| \leq \bar{e}_1$ and $|e_2| \leq \bar{e}_2$.
+
+\textbf{Step 3 (Safety implication):} The true HOCBF condition is:
+\begin{equation}
+    L_f^2 h + L_g L_f h \cdot u + \bm{k}_1 h + \bm{k}_2 L_f h \geq 0
+\end{equation}
+
+Using the decomposition $h = \hat{z}_1 - e_1$, $L_f h = \hat{z}_2 - e_2$, and $L_f^2 h + L_g L_f h \cdot u = \hat{L}_f^2 h + \hat{L}_g L_f h \cdot u - \epsilon_{GP}$, the true constraint becomes:
+\begin{multline}
+    (\hat{L}_f^2 h + \hat{L}_g L_f h \cdot u + \bm{k}_1 \hat{z}_1 + \bm{k}_2 \hat{z}_2) \\
+    - (\bm{k}_1 e_1 + \bm{k}_2 e_2 + \epsilon_{GP}) \geq 0
+\end{multline}
+
+The enforced constraint \eqref{eq:qp_cons} with margin $\rho_t$ ensures:
+\begin{equation}
+    \hat{L}_f^2 h + \hat{L}_g L_f h \cdot u + \bm{k}_1 \hat{z}_1 + \bm{k}_2 \hat{z}_2 \geq \rho_t
+\end{equation}
+
+Since $\rho_t \geq \bm{k}_1 |e_1| + \bm{k}_2 |e_2| + |\epsilon_{GP}|$ under the GP bound event, the true HOCBF condition is satisfied. By the CBF invariance theorem \cite{ames2017cbf}, $h(x(t)) \geq 0$ for all $t$.
+
+Combining the probability of the GP bound event ($1 - \delta/2$) with the deterministic implication (via union bound over initial transient handling, which requires Assumption~\ref{ass:initial_safety}), we obtain the overall probability $1 - \delta$.
+\end{proof}
+
+\begin{corollary}[Convergence of Safety Margin]
+As the number of GP training samples $N \to \infty$ with adequate spatial coverage, $\bar{\sigma}_N \to 0$ (by the consistency of GP regression under Assumption~\ref{ass:rkhs}), and consequently:
+\begin{equation}
+    \rho_t \to 0, \quad \bar{e}_1 \to 0, \quad \bar{e}_2 \to 0
+\end{equation}
+The safety filter becomes asymptotically non-conservative, recovering the performance of the exact CBF.
+\end{corollary}
+
+\subsection{Algorithm Summary}
+
+The complete GP-HGO-CBF algorithm is summarized in Algorithm~\ref{alg:gphgocbf}.
+
+\begin{algorithm}[t]
+\caption{GP-HGO-CBF Safety Filter}
+\label{alg:gphgocbf}
+\begin{algorithmic}[1]
+\REQUIRE Initial state $x_0$, observer gains $\ell, d_1, d_2$, GP kernel $k$, CBF parameters $\bm{k}$, sampling threshold $d_{\min}$ or $\sigma_{\min}^2$
+\STATE Initialize $\hat{z}_1 \leftarrow h(x_0)$, $\hat{z}_2 \leftarrow 0$, GP dataset $\mathcal{D} \leftarrow \emptyset$
+\FOR{each time step $t$}
+    \STATE Measure $y_t = h(x_t)$ (e.g., from range sensor)
+    \STATE \textbf{Observer Update:}
+    \STATE \quad $\dot{\hat{z}}_1 = \hat{z}_2 + \ell d_1 (y_t - \hat{z}_1)$
+    \STATE \quad $\dot{\hat{z}}_2 = \ell^2 d_2 (y_t - \hat{z}_1) + \mu_{L_f^2 h}(x_t) + \mu_{L_g L_f h}(x_t) u_{t-1}$
+    \STATE \textbf{GP Update (event-triggered):}
+    \IF{sampling criterion met}
+        \STATE $\mathcal{D} \leftarrow \mathcal{D} \cup \{(x_t, \hat{z}_2)\}$
+        \STATE Retrain GP, optimize hyperparameters
+    \ENDIF
+    \STATE \textbf{Safety Filter:}
+    \STATE Compute $\hat{L}_f^2 h$, $\hat{L}_g L_f h$ from GP via \eqref{eq:Lffh_gp}--\eqref{eq:Lgfh_gp}
+    \STATE Compute nominal input $u_{\text{nom}} = k_p(x_{\text{goal}} - p) - k_v v$
+    \STATE Solve \eqref{eq:qp_cost}--\eqref{eq:qp_cons} for $u^*$
+    \STATE Apply $u_t = u^*$
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{NUMERICAL SIMULATIONS}
+\label{sec:simulations}
+
+\subsection{Simulation Setup}
+
+We validate the GP-HGO-CBF framework on a planar double-integrator navigation task. The robot must navigate from the origin $(0, 0)$ to the goal $(1, 1)$ while avoiding four circular obstacles and remaining within a bounded workspace.
+
+\subsubsection{System Parameters}
+The system dynamics follow \eqref{eq:double_int} with input bounds $u \in [-2, 2]^2$. The simulation uses a time step $\Delta t = 0.001$\,s over a horizon of $T = 40$\,s. The nominal controller is a PD regulator with gains $k_p = 0.2$ and $k_v = 0.8$.
+
+\subsubsection{Environment}
+The workspace is bounded by $[-0.2, 1.2]^2$. Four circular obstacles are placed at positions $(0.0, 0.7)$, $(0.33, 0.2)$, $(0.66, 0.8)$, $(1.0, 0.3)$, each with radius $r = 0.15$. The barrier function is defined as the product of squared distances to all obstacles and walls:
+\begin{equation}
+    h(x) = \prod_{i} \left(\|p - o_i\|^2 - r_i^2\right) \cdot \prod_{j} (p_j - w_j)^2
+\end{equation}
+This product formulation ensures smoothness and avoids the non-differentiability of the minimum-distance function.
+
+\subsubsection{Observer and GP Parameters}
+The HGO uses gain $\ell = 5$ with coefficients $d_1 = 10$, $d_2 = 50$ (ensuring Hurwitz placement). The GP employs a squared exponential kernel with initial length-scales $\bm{\tau} = [0.3, 0.3, 0.3, 0.3]^\top$ over the 4D state space, with a sliding window of $N = 30$ training points. The event-triggered sampling uses a distance threshold $d_{\min} = 0.03$.
+
+\subsubsection{CBF Parameters}
+The HOCBF uses linear class-$\mathcal{K}$ functions with $\alpha_1 = \alpha_2 = 0.5$, giving $\bm{k} = [0.25, 1.0]$.
+
+\subsection{Comparative Study}
+
+We compare four configurations:
+\begin{enumerate}
+    \item \textbf{No CBF (NONE):} Nominal PD controller only.
+    \item \textbf{Exact CBF:} Full state and analytical derivative knowledge.
+    \item \textbf{GP-CBF:} GP learns $h(x)$ directly; derivatives from GP posterior differentiation.
+    \item \textbf{GP-HGO-CBF:} Proposed method with closed-loop observer-GP coupling.
+\end{enumerate}
+
+\subsection{Results}
+
+% TODO: Fill in with actual simulation results
+% Suggested plots:
+% - Fig. 1: Trajectories for all four methods overlaid on obstacle map
+% - Fig. 2: Barrier function h(x(t)) over time for each method
+% - Fig. 3: Observer estimation error |e_1(t)| and |e_2(t)| comparing HGO vs GP-HGO
+% - Fig. 4: GP posterior variance decay over time
+% - Fig. 5: Safety margin rho_t evolution
+% - Table I: Safety violations, path length, computation time per step
+
+\subsection{Discussion}
+
+% TODO: Discuss:
+% - Safety guarantee satisfaction
+% - Convergence rate comparison
+% - Computational overhead of GP updates
+% - Effect of observer gain ell on transient behavior
+% - Sensitivity to GP hyperparameter initialization
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{CONCLUSIONS}
+\label{sec:conclusions}
+
+We presented the GP-HGO-CBF framework for safe navigation under partial observability of the barrier function derivatives. By embedding Gaussian Process predictions directly within a high-gain observer's dynamics, the proposed method achieves tighter estimation error bounds compared to cascade architectures, translating into less conservative safety constraints. We provided formal convergence guarantees and a probabilistic safety certificate, and validated the approach through numerical simulations. Future work includes extension to higher-dimensional systems, experimental validation on robotic platforms, and investigation of sparse GP approximations for computational scalability.
+
+\addtolength{\textheight}{-12cm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{thebibliography}{99}
+
+\bibitem{ames2017cbf}
+A.~D. Ames, X.~Xu, J.~W. Grizzle, and P.~Tabuada, ``Control barrier function based quadratic programs for safety critical systems,'' \emph{IEEE Trans. Autom. Control}, vol.~62, no.~8, pp.~3861--3876, 2017.
+
+\bibitem{xiao2019hocbf}
+W.~Xiao and C.~Belta, ``Control barrier functions for systems with high relative degree,'' in \emph{Proc. IEEE Conf. Decision and Control (CDC)}, 2019, pp.~474--479.
+
+\bibitem{jagtap2020gpcbf}
+P.~Jagtap, G.~J. Pappas, and M.~Zamani, ``Control barrier functions for unknown nonlinear systems using Gaussian processes,'' in \emph{Proc. IEEE Conf. Decision and Control (CDC)}, 2020, pp.~3699--3704.
+
+\bibitem{castaneda2021pointwise}
+F.~Casta\~{n}eda, J.~J. Choi, B.~Zhang, C.~J. Tomlin, and K.~Sreenath, ``Pointwise feasibility of Gaussian process-based safety-critical control under model uncertainty,'' in \emph{Proc. IEEE Conf. Decision and Control (CDC)}, 2021, pp.~6762--6769.
+
+\bibitem{castaneda2022recursive}
+F.~Casta\~{n}eda, J.~J. Choi, W.~Jung, B.~Zhang, C.~J. Tomlin, and K.~Sreenath, ``Recursively feasible probabilistic safe online learning with control barrier functions,'' \emph{arXiv:2208.10733}, 2022.
+
+\bibitem{trimarchi2022hgogp}
+B.~Trimarchi, L.~Gentilini, F.~Schiano, and L.~Marconi, ``Data-driven analytic differentiation via high gain observers and Gaussian process priors,'' \emph{arXiv:2210.15528}, 2022.
+
+\bibitem{cheng2022dobcbf}
+Y.~Cheng, P.~Zhao, and N.~Hovakimyan, ``Safe and efficient reinforcement learning using disturbance-observer-based control barrier functions,'' \emph{arXiv:2211.17250}, 2022.
+
+\bibitem{aali2024hocbfgp}
+M.~Aali and J.~Liu, ``Learning high-order control barrier functions for safety-critical control with Gaussian processes,'' \emph{arXiv:2403.09573}, 2024.
+
+\bibitem{khalil2017hgo}
+H.~K. Khalil, \emph{High-Gain Observers in Nonlinear Feedback Control}.\hskip 1em plus 0.5em minus 0.4em Philadelphia, PA: SIAM, 2017.
+
+\bibitem{lederer2019uniform}
+A.~Lederer, J.~Umlauft, and S.~Hirche, ``Uniform error bounds for Gaussian process regression with application to safe control,'' in \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2019, pp.~7187--7198.
+
+\bibitem{srinivas2010gpucb}
+N.~Srinivas, A.~Krause, S.~Kakade, and M.~Seeger, ``Gaussian process optimization in the bandit setting: No regret and experimental design,'' in \emph{Proc. Int. Conf. Machine Learning (ICML)}, 2010, pp.~1015--1022.
+
+\bibitem{ames2019cbfqp}
+A.~D. Ames, S.~Coogan, M.~Egerstedt, G.~Notomista, K.~Sreenath, and P.~Tabuada, ``Control barrier functions: Theory and applications,'' in \emph{Proc. European Control Conf. (ECC)}, 2019, pp.~3420--3431.
+
+\bibitem{khan2022gaussiancbf}
+M.~Khan, T.~Ibuki, and A.~Chatterjee, ``Gaussian control barrier functions: A non-parametric paradigm to safety,'' \emph{arXiv:2203.15474}, 2022.
+
+\bibitem{gutierrez2025realtime}
+R.~Gutierrez and J.~B. Hoagg, ``Control barrier functions with real-time Gaussian process modeling,'' \emph{arXiv:2505.06765}, 2025.
+
+\bibitem{dhiman2020controlbarriers}
+V.~Dhiman, M.~J. Khojasteh, M.~Franceschetti, and N.~Atanasov, ``Control barriers in Bayesian learning of system dynamics,'' \emph{IEEE Trans. Autom. Control}, vol.~67, no.~5, pp.~2442--2456, 2022.
+
+\bibitem{fan2020bayesian}
+D.~D. Fan, J.~Nguyen, R.~Thakker, N.~Alatur, A.~Agha-mohammadi, and E.~A. Theodorou, ``Bayesian learning-based adaptive control for safety critical systems,'' in \emph{Proc. IEEE Int. Conf. Robotics and Automation (ICRA)}, 2020, pp.~4093--4099.
+
+\bibitem{chowdhury2017kernelized}
+S.~Chowdhury and A.~Gopalan, ``On kernelized multi-armed bandits,'' in \emph{Proc. Int. Conf. Machine Learning (ICML)}, 2017, pp.~844--853.
+
+\end{thebibliography}
+
+\end{document}

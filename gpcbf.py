@@ -36,8 +36,8 @@ class Parameters:
     #                      [np.random.rand(), np.random.rand(), 0.15]])
 
     self.dif = 0.0001 # Numerical Diff. Precision
-    self.dt = 0.001
-    self.tf = 40
+    self.dt = 0.01
+    self.tf = 20
 
     self.xx = self.init.reshape((6,1))
 
@@ -108,7 +108,7 @@ def obs(params, x, u, y):
     Lff_h = dLfh_@ff
     Lgf_h = dLfh_@gg
 
-    xd[1] = xd[1] + Lff_h + Lgf_h@u.T
+    xd[1] = (xd[1] + Lff_h + Lgf_h@u.T)[0, 0]
   
   return xd
 
